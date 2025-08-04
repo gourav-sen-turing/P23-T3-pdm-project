@@ -54,15 +54,37 @@ class PyProject(TOMLBase):
     def metadata(self) -> items.Table:
         return self._data.setdefault("project", {})
 
-    def dependency_groups(self):
-        return self.settings.setdefault("dev-dependencies", {})
+    @property
+    def dependency_groups(self) -> items.Table:
+        """Get dependency groups from PEP 735 [dependency-groups] table.
+
+        This property specifically returns the PEP 735 format dependency groups.
+        For backward compatibility with legacy format, use dev_dependencies property.
+        """
+        return self._data.setdefault("dependency-groups", {})
 
     @property
     def dev_dependencies(self) -> dict[str, list[Any]]:
+        """Get all development dependency groups from both PEP 735 and legacy formats.
+
+        This merges groups from both [dependency-groups] and [tool.pdm.dev-dependencies].
+        If a group exists in both places, the PEP 735 format takes precedence.
+        """
         groups: dict[str, list[Any]] = {}
+
+        # First, add groups from the legacy format
         for group, deps in self.settings.get("dev-dependencies", {}).items():
             group = normalize_name(group)
             groups.setdefault(group, []).extend(deps.unwrap() if hasattr(deps, "unwrap") else deps)
+
+        # Then, add/override with groups from PEP 735 format
+        if "dependency-groups" in self._data:
+            for group, deps in self._data.get("dependency-groups", {}).items():
+                group = normalize_name(group)
+                # Clear existing group if it exists (PEP 735 takes precedence)
+                groups[group] = []
+                groups[group].extend(deps.unwrap() if hasattr(deps, "unwrap") else deps)
+
         return groups
 
     @property
