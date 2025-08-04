@@ -209,3 +209,65 @@ This project is strongly inspired by [pyflow] and [poetry].
 ## License
 
 This project is open sourced under MIT license, see the [LICENSE](LICENSE) file for more details.
+
+# Turn 1: Model A response
+
+## Analysis Summary
+
+### Current State
+1. PDM currently uses `[tool.pdm.dev-dependencies]` table in `pyproject.toml` for development dependencies
+2. The `PyProject` class has a `dependency_groups` property that returns dev-dependencies
+3. The system supports optional dependencies in `[project.optional-dependencies]`
+4. There's no support for the PEP 735 `include-group` directive
+5. Tests are expecting `dependency_groups` to be used instead of `dev_dependencies`
+
+### What PEP 735 Requires
+1. A new top-level `[dependency-groups]` table (not under `[tool.pdm]`)
+2. Support for `include-group` directive to reference other groups:
+```toml
+[dependency-groups]
+test = ["pytest", "coverage"]
+dev = [{include-group = "test"}, "ruff"]
+```
+3. Support for `self[extra]` references within dependency groups to refer to optional dependencies
+
+### Failing Tests Analysis
+1. **`test_dependency_group_selection`** - Expects groups to be resolved with proper handling of dev groups
+2. **`test_add_package_to_custom_dev_group`** - Expects dependencies added with `--dev` to go into `dependency_groups`
+3. **`test_lock_include_groups_not_allowed`** - Tests that `include-group` references work correctly
+4. **`test_lock_optional_referencing_dev_group_not_allowed`** - Tests cross-referencing between optional and dev groups
+5. **`test_prod_should_not_be_with_dev`** - Tests that `--prod` flag excludes dev dependencies
+
+## Implementation Approach
+
+Here's my proposed approach to implement PEP 735 support:
+
+### 1. Update PyProject Model (`project_file.py`)
+- Add a new property `dependency_groups` that reads from the top-level `[dependency-groups]` table
+- Maintain backward compatibility by falling back to `[tool.pdm.dev-dependencies]` if new format doesn't exist
+- Update `dependency_groups()` method to return the new table location
+- Add logic to resolve `include-group` directives
+
+### 2. Update Dependency Resolution (`core.py`)
+- Modify `get_dependencies()` to handle the new dependency groups format
+- Implement recursive resolution for `include-group` directives
+- Handle `self[extra]` references within dependency groups
+- Ensure proper error handling for circular references
+
+### 3. Update CLI Commands
+- Modify `add` command to write to `[dependency-groups]` by default when using `--dev`
+- Update the lock command to properly resolve included groups
+- Ensure all commands that interact with dev dependencies use the new format
+
+### 4. Update GroupSelection (`filters.py`)
+- Update the group selection logic to work with the new dependency groups format
+- Ensure proper handling of include-group references during group selection
+
+### 5. Migration Strategy
+- When reading, check both locations (`[dependency-groups]` and `[tool.pdm.dev-dependencies]`)
+- When writing new dependencies, use `[dependency-groups]` by default
+- Provide a migration path for existing projects
+
+### 6. Update Tests
+- Update test fixtures to use the new format
+- Ensure backward compatibility tests still pass
