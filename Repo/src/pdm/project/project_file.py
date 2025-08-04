@@ -42,8 +42,6 @@ class PyProject(TOMLBase):
         """Write the TOMLDocument to the file."""
         _remove_empty_tables(self._data.get("project", {}))
         _remove_empty_tables(self._data.get("tool", {}).get("pdm", {}))
-        if "dependency-groups" in self._data and not self.dependency_groups:
-            del self._data["dependency-groups"]
         super().write()
         if show_message:
             self.ui.echo("Changes are written to [success]pyproject.toml[/].", verbosity=termui.Verbosity.NORMAL)
@@ -56,18 +54,12 @@ class PyProject(TOMLBase):
     def metadata(self) -> items.Table:
         return self._data.setdefault("project", {})
 
-    @property
-    def dependency_groups(self) -> items.Table:
-        return self._data.setdefault("dependency-groups", {})
+    def dependency_groups(self):
+        return self.settings.setdefault("dev-dependencies", {})
 
     @property
     def dev_dependencies(self) -> dict[str, list[Any]]:
         groups: dict[str, list[Any]] = {}
-        for group, deps in self._data.get("dependency-groups", {}).items():
-            group = normalize_name(group)
-            if group in groups:
-                raise ProjectError(f"The group {group} is duplicated in dependency-groups")
-            groups[group] = deps.unwrap() if hasattr(deps, "unwrap") else deps
         for group, deps in self.settings.get("dev-dependencies", {}).items():
             group = normalize_name(group)
             groups.setdefault(group, []).extend(deps.unwrap() if hasattr(deps, "unwrap") else deps)
