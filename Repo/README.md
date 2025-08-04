@@ -209,3 +209,55 @@ This project is strongly inspired by [pyflow] and [poetry].
 ## License
 
 This project is open sourced under MIT license, see the [LICENSE](LICENSE) file for more details.
+
+# Turn 1: Model B response
+
+## Analysis Summary
+
+Based on the failing tests and code analysis, here's what needs to be implemented for PEP 735 support:
+
+1. **Current State:**
+- PDM currently uses `[tool.pdm.dev-dependencies]` for development dependencies
+- The code references `project.pyproject.dependency_groups` which returns the dev-dependencies table
+- There's already some support for `include-group` directive in tests
+
+2. **What the tests expect:**
+- Tests expect `project.pyproject.dependency_groups` to work with a new format
+- Support for `include-group` directive that references other groups
+- Proper resolution of groups with circular references prevention
+- Backward compatibility with the old `[tool.pdm.dev-dependencies]` format
+
+3. **Key failing test patterns:**
+- `test_dependency_group_selection` tests expect groups to be resolved correctly
+- `test_add_package_to_custom_dev_group` expects adding packages to work with the new format
+- `test_lock_include_groups_not_allowed` and related tests check that include-group works correctly
+- Tests check that groups can reference each other via `include-group`
+
+## Implementation Approach
+
+Here's my proposed approach to implement PEP 735 support:
+
+### 1. **Update PyProject class** (`src/pdm/project/project_file.py`):
+- Add a new property `dependency_groups_pep735` that reads from `[dependency-groups]` table
+- Modify the existing `dependency_groups` property to check both locations (new PEP 735 and old PDM format)
+- Update `dev_dependencies` to merge groups from both locations
+
+### 2. **Update dependency resolution** (`src/pdm/project/core.py`):
+- Modify `get_dependencies()` to handle `include-group` directives
+- Add recursive group resolution with circular dependency detection
+- Support `self[extra]` references within dependency groups
+
+### 3. **Update group iteration** (`src/pdm/project/core.py`):
+- Modify `iter_groups()` to include groups from both `[dependency-groups]` and `[tool.pdm.dev-dependencies]`
+
+### 4. **Update content hash calculation**:
+- Include the new `[dependency-groups]` in the content hash calculation
+
+### 5. **Update add/remove commands**:
+- When adding new dev dependencies, prefer the new `[dependency-groups]` format
+- Maintain backward compatibility for existing projects
+
+### 6. **Handle include-group resolution**:
+- Parse dictionary items with `include-group` key
+- Recursively resolve included groups
+- Detect and prevent circular references
