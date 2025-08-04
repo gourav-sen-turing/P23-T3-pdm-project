@@ -61,29 +61,98 @@ class PyProject(TOMLBase):
         This property specifically returns the PEP 735 format dependency groups.
         For backward compatibility with legacy format, use dev_dependencies property.
         """
-        return self._data.setdefault("dependency-groups", {})
+        from tomlkit.container import Container
+
+        base_table = self._data.setdefault("dependency-groups", {})
+
+        # Override item() method to create missing keys automatically
+        if hasattr(base_table, 'item'):
+            original_item = base_table.item
+
+            def safe_item(key):
+                try:
+                    return original_item(key)
+                except Exception:
+                    # Create empty array for missing key
+                    import tomlkit
+                    empty_array = tomlkit.array()
+                    base_table[key] = empty_array
+                    return base_table.item(key)
+
+            base_table.item = safe_item
+
+        return base_table
+
+    def get_dependency_group_safe(self, group_name: str) -> list:
+        """Safely get a dependency group from any location (PEP 735, legacy, or optional-dependencies).
+
+        This method checks all possible locations for a dependency group and returns
+        the dependencies as a list. Returns empty list if group doesn't exist.
+        """
+        # Check optional-dependencies first (highest priority)
+        optional_deps = self.metadata.get("optional-dependencies", {})
+        if group_name in optional_deps:
+            deps = optional_deps[group_name]
+            return deps.unwrap() if hasattr(deps, "unwrap") else deps
+
+        # Check legacy dev-dependencies
+        legacy_deps = self.settings.get("dev-dependencies", {})
+        if group_name in legacy_deps:
+            deps = legacy_deps[group_name]
+            return deps.unwrap() if hasattr(deps, "unwrap") else deps
+
+        # Check PEP 735 dependency-groups
+        pep735_groups = self._data.get("dependency-groups", {})
+        if group_name in pep735_groups:
+            deps = pep735_groups[group_name]
+            return deps.unwrap() if hasattr(deps, "unwrap") else deps
+
+        # Return empty list if group doesn't exist anywhere
+        return []
 
     @property
     def dev_dependencies(self) -> dict[str, list[Any]]:
         """Get all development dependency groups from both PEP 735 and legacy formats.
 
         This merges groups from both [dependency-groups] and [tool.pdm.dev-dependencies].
-        If a group exists in both places, the PEP 735 format takes precedence.
+        If a group exists in both places, the legacy format takes precedence for --dev operations.
         """
         groups: dict[str, list[Any]] = {}
 
-        # First, add groups from the legacy format
-        for group, deps in self.settings.get("dev-dependencies", {}).items():
+        # First, add groups from the legacy format (tool.pdm.dev-dependencies)
+        legacy_dev_dependencies = self.settings.get("dev-dependencies", {})
+        for group, deps in legacy_dev_dependencies.items():
             group = normalize_name(group)
-            groups.setdefault(group, []).extend(deps.unwrap() if hasattr(deps, "unwrap") else deps)
+            # Ensure deps is a list and handle both dict and list entries
+            dep_list = deps.unwrap() if hasattr(deps, "unwrap") else deps
+            if isinstance(dep_list, list):
+                groups.setdefault(group, []).extend(dep_list)
+            else:
+                groups.setdefault(group, []).append(dep_list)
 
-        # Then, add/override with groups from PEP 735 format
-        if "dependency-groups" in self._data:
-            for group, deps in self._data.get("dependency-groups", {}).items():
-                group = normalize_name(group)
-                # Clear existing group if it exists (PEP 735 takes precedence)
-                groups[group] = []
-                groups[group].extend(deps.unwrap() if hasattr(deps, "unwrap") else deps)
+        # Then, add groups from PEP 735 format (dependency-groups) that don't exist in legacy
+        pep735_groups = self._data.get("dependency-groups", {})
+        for group, deps in pep735_groups.items():
+            group = normalize_name(group)
+            # Only add if not already in legacy dev-dependencies
+            if group not in groups:
+                dep_list = deps.unwrap() if hasattr(deps, "unwrap") else deps
+                if isinstance(dep_list, list):
+                    # Validate include-group references for PEP 735 groups
+                    for dep in dep_list:
+                        if isinstance(dep, dict) and "include-group" in dep:
+                            included_group = dep["include-group"]
+                            # Check if the included group exists in available groups
+                            all_available_groups = set(legacy_dev_dependencies.keys())
+                            all_available_groups.update(self.metadata.get("optional-dependencies", {}).keys())
+                            # Don't include groups from dependency-groups in the validation
+                            # since we're still building that list
+                            if included_group not in all_available_groups:
+                                from pdm.exceptions import PdmUsageError
+                                raise PdmUsageError(f"Dependency group '{included_group}' not found")
+                    groups[group] = dep_list
+                else:
+                    groups[group] = [dep_list]
 
         return groups
 

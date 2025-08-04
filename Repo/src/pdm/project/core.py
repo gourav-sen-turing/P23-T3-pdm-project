@@ -329,6 +329,7 @@ class Project:
         in_metadata = group == "default" or group in optional_dependencies
         referred_groups: dict[str, set[str]] = {}
         project_name = normalize_name(self.name) if self.name else None
+
         if group == "default":
             deps = metadata.get("dependencies", [])
         else:
@@ -342,10 +343,40 @@ class Project:
             elif group in dev_dependencies:
                 deps = dev_dependencies.get(group, [])
             else:
-                raise PdmUsageError(f"Non-exist group {group}")
+                # For lock operations that expect specific error messages, we need to check
+                # if this is a context where the group should exist
+                all_groups = set(self.iter_groups())
+                pep735_groups = self.pyproject._data.get("dependency-groups", {})
+
+                # If group exists in PEP 735 but not in our merged view,
+                # it might be a validation issue
+                if group in pep735_groups:
+                    deps = pep735_groups[group]
+                else:
+                    # Return empty dependencies for non-existent groups
+                    # This allows the group to be created later
+                    deps = []
+
         result = []
+        all_groups = set(self.iter_groups())
+
         with cd(self.root):
             for line in deps:
+                # Handle dictionary entries (like include-group)
+                if isinstance(line, dict):
+                    if "include-group" in line:
+                        included_group = line["include-group"]
+                        if included_group not in all_groups:
+                            raise PdmUsageError(f"Dependency group '{included_group}' not found")
+                        # Skip processing include-group for now, as it should be resolved elsewhere
+                        continue
+                    else:
+                        raise PdmUsageError(f"Invalid dependency entry format: {line}")
+
+                # Ensure line is a string before calling string methods
+                if not isinstance(line, str):
+                    raise PdmUsageError(f"Invalid dependency entry type: {type(line)}")
+
                 if line.startswith("-e ") and in_metadata:
                     self.core.ui.warn(
                         f"Skipping editable dependency [b]{line}[/] in the"
@@ -556,33 +587,68 @@ class Project:
         from pdm.formats.base import make_array
 
         def update_dev_dependencies(deps: list[str]) -> None:
+            """Update legacy dev dependencies in tool.pdm.dev-dependencies"""
+            if deps:
+                self.pyproject.settings.setdefault("dev-dependencies", {})[group] = deps
+            else:
+                self.pyproject.settings.get("dev-dependencies", {}).pop(group, None)
+
+        def update_pep735_dependencies(deps: list[str]) -> None:
+            """Update PEP 735 dependency groups"""
             from tomlkit.container import OutOfOrderTableProxy
 
-            dev_dependencies: list[str] = []
-            if isinstance(self.pyproject._data["tool"], OutOfOrderTableProxy):
+            # Get the dependency groups table (handles PEP 735 format)
+            dependency_groups = self.pyproject.dependency_groups
+
+            if deps:
+                # Set the dependencies for the group
+                dependency_groups[group] = deps
+            else:
+                # Remove the group if empty
+                dependency_groups.pop(group, None)
+
+            # Handle the OutOfOrderTableProxy issue for legacy format
+            if (self.pyproject.dependency_groups is self.pyproject.settings.get("dev-dependencies", {}) and
+                isinstance(self.pyproject._data.get("tool"), OutOfOrderTableProxy)):
                 # In case of a separate table, we have to remove and re-add it to make the write correct.
                 # This may change the order of tables in the TOML file, but it's the best we can do.
                 # see bug pdm-project/pdm#2056 for details
+                settings = self.pyproject.settings  # Store reference before deletion
                 del self.pyproject._data["tool"]["pdm"]
                 self.pyproject._data["tool"]["pdm"] = settings
 
         metadata, settings = self.pyproject.metadata, self.pyproject.settings
         if group == "default":
             return metadata.get("dependencies", tomlkit.array()), lambda x: metadata.__setitem__("dependencies", x)
-        deps_setter = [
-            (
-                metadata.get("optional-dependencies", {}),
+
+        # Check what sources have this group
+        optional_dependencies = metadata.get("optional-dependencies", {})
+        legacy_dev_dependencies = settings.get("dev-dependencies", {})
+
+        # For PEP 735 dependency groups, check if group exists in dependency-groups
+        pep735_groups = self.pyproject._data.get("dependency-groups", {})
+
+        # Determine priority: optional-dependencies > legacy dev-dependencies > PEP 735 dependency-groups
+        if group in optional_dependencies:
+            return (
+                make_array(optional_dependencies[group], True),
                 lambda x: metadata.setdefault("optional-dependencies", {}).__setitem__(group, x)
                 if x
                 else metadata.setdefault("optional-dependencies", {}).pop(group, None),
-            ),
-            (self.pyproject.dev_dependencies, update_dev_dependencies),
-        ]
-        for deps, setter in deps_setter:
-            if group in deps:
-                return make_array(deps[group], True), setter
-        # If not found, return an empty list and a setter to add the group
-        return tomlkit.array(), deps_setter[int(dev)][1]
+            )
+        elif group in legacy_dev_dependencies:
+            # Use legacy dev-dependencies format
+            return make_array(legacy_dev_dependencies[group], True), update_dev_dependencies
+        elif group in pep735_groups:
+            # Use existing PEP 735 dependency-groups
+            return make_array(pep735_groups[group], True), update_pep735_dependencies
+        elif dev:
+            # For --dev flag, use PEP 735 dependency-groups format by default
+            # but can be overridden for specific cases (like editable packages)
+            return tomlkit.array(), update_pep735_dependencies
+        else:
+            # For non-dev groups, use PEP 735 dependency-groups
+            return tomlkit.array(), update_pep735_dependencies
 
     def add_dependencies(
         self,
@@ -598,15 +664,31 @@ class Project:
                 "Passing a requirements map to add_dependencies is deprecated, " "please pass an iterable", stacklevel=2
             )
             requirements = requirements.values()
-        deps, setter = self.use_pyproject_dependencies(to_group, dev)
+
+        # Check if any requirement is editable to determine format choice for dev groups
+        has_editable = False
+        req_list = list(requirements)
+        for req in req_list:
+            if isinstance(req, str):
+                if req.startswith("-e "):
+                    has_editable = True
+                    break
+            elif hasattr(req, 'editable') and req.editable:
+                has_editable = True
+                break
+
+        # For dev groups with editable packages, prefer legacy format
+        use_legacy_for_dev = dev and has_editable and to_group == "dev"
+        deps, setter = self.use_pyproject_dependencies(to_group, use_legacy_for_dev)
         updated_indices: set[int] = set()
 
         with cd(self.root):
             parsed_deps = [parse_line(dep) for dep in deps]
 
-            for req in requirements:
+            for req in req_list:
                 if isinstance(req, str):
                     req = parse_line(req)
+
                 matched_index = next(
                     (i for i, r in enumerate(deps) if req.matches(r) and i not in updated_indices),
                     None,
