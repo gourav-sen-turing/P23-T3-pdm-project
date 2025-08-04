@@ -55,6 +55,38 @@ class PyProject(TOMLBase):
         return self._data.setdefault("project", {})
 
     def dependency_groups(self):
+        """Return dependency groups table.
+
+        This implements PEP 735 support with backward compatibility:
+        1. First check for the new [dependency-groups] top-level table
+        2. Fall back to [tool.pdm.dev-dependencies] if new format doesn't exist
+        3. If both exist, new format takes precedence but a warning is logged
+        """
+        # Check for new PEP 735 format: [dependency-groups]
+        pep735_groups = self._data.get("dependency-groups", {})
+
+        # Check for legacy format: [tool.pdm.dev-dependencies]
+        legacy_groups = self.settings.get("dev-dependencies", {})
+
+        # If both exist, warn the user and prefer the new format
+        if pep735_groups and legacy_groups:
+            from pdm import termui
+            self.ui.echo(
+                "[warning]Both [dependency-groups] and [tool.pdm.dev-dependencies] "
+                "tables exist. Using [dependency-groups] as per PEP 735.[/]",
+                err=True,
+                verbosity=termui.Verbosity.NORMAL
+            )
+            return pep735_groups
+
+        # Use new format if it exists
+        if pep735_groups:
+            return pep735_groups
+
+        # Otherwise fall back to legacy format
+        # For backward compatibility, when writing to legacy format,
+        # we need to ensure it's properly initialized in the settings
+        # Return the legacy location to maintain backward compatibility
         return self.settings.setdefault("dev-dependencies", {})
 
     @property
