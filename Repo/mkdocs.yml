@@ -1,0 +1,138 @@
+site_name: PDM
+
+repo_url: https://github.com/pdm-project/pdm
+edit_uri: edit/main/docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      media: "(prefers-color-scheme: light)"
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - scheme: slate
+      media: "(prefers-color-scheme: dark)"
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  font:
+    text: Open Sans
+    code: Fira Code
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  features:
+    - content.code.copy
+    - navigation.tabs
+    - navigation.tabs.sticky
+  custom_dir: docs/overrides
+
+plugins:
+  - search
+  - markdown-exec
+  - "mkdocs-version-annotations":
+      version_added_admonition: "tip"
+  - mkdocstrings:
+      enable_inventory: true
+      handlers:
+        python:
+          options:
+            docstring_style: google
+  - redirects:
+      redirect_maps:
+        'plugin/fixtures.md': 'dev/fixtures.md'
+        'plugin/write.md': 'dev/write.md'
+        'pyproject/build.md': 'reference/build.md'
+        'plugin/reference.md': 'reference/api.md'
+        'usage/cli_reference.md': 'reference/cli.md'
+        'usage/configuration.md': 'reference/configuration.md'
+        'pyproject/pep621.md': 'reference/pep621.md'
+
+nav:
+  - Usage:
+      - Introduction: index.md
+      - usage/project.md
+      - usage/dependency.md
+      - Lock Files:
+        - usage/lockfile.md
+        - usage/lock-targets.md
+      - usage/uv.md
+      - usage/publish.md
+      - usage/config.md
+      - usage/scripts.md
+      - usage/hooks.md
+      - usage/advanced.md
+      - usage/venv.md
+      - usage/pep582.md
+      - usage/template.md
+  - Reference:
+      - reference/pep621.md
+      - reference/configuration.md
+      - reference/build.md
+      - reference/cli.md
+      - reference/api.md
+  - Development:
+      - dev/write.md
+      - dev/fixtures.md
+      - dev/contributing.md
+      - dev/changelog.md
+      - dev/benchmark.md
+  - Sponsor: https://github.com/sponsors/pdm-project
+
+markdown_extensions:
+  - pymdownx.highlight:
+      linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.snippets:
+      restrict_base_path: false
+  - admonition
+  - tables
+  - toc:
+      permalink: "#"
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+copyright: Copyright &copy; 2019 <a href="https://frostming.com">Frost Ming</a>
+
+extra:
+  version:
+    provider: mike
+  analytics:
+    provider: google
+    property: G-RP4PM5PGLN
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pdm-project/pdm
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/pdm_project
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/Phn8smztpv
+  chatbot:
+    url: https://2prxfnwkygf4vexczrbpcq.streamlit.app/?embed=true
+  alternate:
+    - name: '🇬🇧 English'
+      link: /en/
+      lang: en
+    - name: '🇨🇳 简体中文'
+      link: /zh-cn/
+      lang: zh
+extra_css:
+  - assets/extra.css
+extra_javascript:
+  - assets/extra.js
+
+watch:
+  - src

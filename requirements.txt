@@ -1,0 +1,2 @@
+# Dependencies extracted from Repo/pyproject.toml
+# This is a PDM project - use 'pdm install' for full dependency management
